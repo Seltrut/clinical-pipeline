@@ -1,0 +1,52 @@
+server:
+  port: 8082
+
+spring:
+  application:
+    name: clinical-consumer-service
+
+  # Kafka Consumer Configuration
+  kafka:
+    bootstrap-servers: localhost:9092
+
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      properties:
+        spring.json.add.type.headers: false
+        
+    consumer:
+      group-id: clinical-processing-group
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring.json.trusted.packages: "*"
+        spring.json.use.type.headers: false
+        spring.json.value.default.type: com.clinical.consumerservice.dto.ClinicalObservationEvent
+
+  # PostgreSQL Configuration
+  datasource:
+    url: jdbc:postgresql://localhost:5432/clinical_db
+    username: postgres
+    password: password
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
+
+  # Redis Configuration
+  data:
+    redis:
+      host: localhost
+      port: 6379
+
+app:
+  kafka:
+    topics:
+      clinical-events: clinical.events.raw
+      clinical-dlq: clinical.events.dlq

@@ -17,7 +17,7 @@ public class ClinicalObservationController {
     private final ClinicalEventProducer producer;
 
     @PostMapping
-    public ResponseEntity ingestObservation(@Valid @RequestBody ClinicalObservationRequest request) {
+    public ResponseEntity<Map<String, String>> ingestObservation(@Valid @RequestBody ClinicalObservationRequest request) {
         producer.sendEvent(request);
         return ResponseEntity.accepted().body(Map.of(
             "status", "ACCEPTED",

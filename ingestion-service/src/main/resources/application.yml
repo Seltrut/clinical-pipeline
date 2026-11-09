@@ -13,6 +13,7 @@ spring:
       retries: 3
     properties:
       enable.idempotence: true
+      spring.json.added.type.headers: false
 
 app:
   kafka:
