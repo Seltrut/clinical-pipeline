@@ -23,6 +23,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.Executors;
+import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -171,6 +172,87 @@ class ClinicalEventConsumerIntegrationTest {
                 .count();
 
             assertThat(count).isEqualTo(1);
+        });
+    }
+
+    @Test
+    @DisplayName("Poison pill record with impossible clinical value is retried and routed to DLQ")
+    void shouldRoutePoisonPillToDeadLetterQueue() {
+        var poisonEvent = new ClinicalObservationEvent(
+            "evt-poison-pill-001",
+            "pat-bad-data",
+            "8480-6",
+            "Systolic Blood Pressure",
+            -50.0, // Impossible negative blood pressure
+            "mmHg",
+            Instant.now()
+        );
+
+        // Set up a consumer specifically listening to the DLQ topic
+        Map<String, Object> dlqConsumerProps = org.springframework.kafka.test.utils.KafkaTestUtils.consumerProps(
+            KAFKA.getBootstrapServers(), "dlq-verify-group", "true"
+        );
+        dlqConsumerProps.put(org.apache.kafka.clients.consumer.ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, org.apache.kafka.common.serialization.StringDeserializer.class);
+        dlqConsumerProps.put(org.apache.kafka.clients.consumer.ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, org.apache.kafka.common.serialization.StringDeserializer.class);
+        dlqConsumerProps.put(org.apache.kafka.clients.consumer.ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
+
+        var dlqConsumer = new org.springframework.kafka.core.DefaultKafkaConsumerFactory<String, String>(dlqConsumerProps).createConsumer();
+        dlqConsumer.subscribe(java.util.Collections.singletonList("clinical.events.dlq"));
+
+        // Send the bad record
+        kafkaTemplate.send("clinical.events.raw", poisonEvent.patientId(), poisonEvent);
+
+        // Assert that the record landed in the DLQ within 10 seconds
+        await().atMost(10, TimeUnit.SECONDS).untilAsserted(() -> {
+            var dlqRecord = org.springframework.kafka.test.utils.KafkaTestUtils.getSingleRecord(
+                dlqConsumer, "clinical.events.dlq", Duration.ofSeconds(5)
+            );
+
+            assertThat(dlqRecord).isNotNull();
+            assertThat(dlqRecord.key()).isEqualTo("pat-bad-data");
+            assertThat(dlqRecord.value()).contains("evt-poison-pill-001");
+
+            // Verify it was never written to PostgreSQL
+            boolean existsInDb = repository.existsByEventId("evt-poison-pill-001");
+            assertThat(existsInDb).isFalse();
+        });
+
+        dlqConsumer.close();
+    }
+
+    @Test
+    @DisplayName("Consumer recovers after a poison pill and processes subsequent valid events on the same partition")
+    void shouldRecoverAndProcessValidEventAfterPoisonPill() {
+        String patientId = "pat-recovery-test";
+
+        var poisonEvent = new ClinicalObservationEvent(
+            "evt-poison-999",
+            patientId,
+            "8480-6",
+            "Systolic Blood Pressure",
+            999.0, // Out of bounds (> 350.0)
+            "mmHg",
+            Instant.now()
+        );
+
+        var validEvent = new ClinicalObservationEvent(
+            "evt-valid-1000",
+            patientId,
+            "8867-4",
+            "Heart rate",
+            72.0, // Valid heart rate
+            "/min",
+            Instant.now()
+        );
+
+        // Send poison pill followed immediately by a valid event for the same patient
+        kafkaTemplate.send("clinical.events.raw", patientId, poisonEvent);
+        kafkaTemplate.send("clinical.events.raw", patientId, validEvent);
+
+        // Assert the poison pill was rejected and the valid event was persisted
+        await().atMost(10, TimeUnit.SECONDS).untilAsserted(() -> {
+            assertThat(repository.existsByEventId("evt-poison-999")).isFalse();
+            assertThat(repository.existsByEventId("evt-valid-1000")).isTrue();
         });
     }
 }

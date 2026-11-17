@@ -1,8 +1,11 @@
 package com.clinical.consumerservice.service;
 
 import com.clinical.consumerservice.dto.ClinicalObservationEvent;
+import com.clinical.consumerservice.exception.InvalidClinicalDataException;
 import com.clinical.consumerservice.model.ClinicalObservationEntity;
 import com.clinical.consumerservice.repository.ClinicalObservationRepository;
+import com.clinical.consumerservice.validation.ClinicalDataValidator;
+
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -19,6 +22,7 @@ public class ClinicalEventConsumer {
 
     private final ClinicalObservationRepository repository;
     private final StringRedisTemplate redisTemplate;
+    private final ClinicalDataValidator validator;
 
     private static final String IDEMPOTENCY_PREFIX = "processed_event:";
     private static final Duration TTL = Duration.ofHours(24);
@@ -30,6 +34,9 @@ public class ClinicalEventConsumer {
     */
     @KafkaListener(topics = "${app.kafka.topics.clinical-events}", groupId = "${spring.kafka.consumer.group-id}")
     public void processClinicalEvent(ClinicalObservationEvent event) {
+        log.info("Recieved event {} for patient {}", event.eventId(), event.patientId());
+        validator.validate(event);
+
         String redisKey = IDEMPOTENCY_PREFIX + event.eventId();
 
         // Atomic check-and-set in Redis (SETNX with 24-hour expiration)
@@ -53,6 +60,6 @@ public class ClinicalEventConsumer {
             .build();
 
         repository.save(entity);
-        log.info("Successfully persisted event {} for patient {} to PostgreSQL", event.eventId(), event.patientId());
+        log.info("Successfully persisted event {} for patient {}", event.eventId(), event.patientId());
     }
 }
