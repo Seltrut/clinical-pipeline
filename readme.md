@@ -165,11 +165,11 @@ docker run --rm -i --add-host=host.docker.internal:host-gateway grafana/k6 run -
 
 ### Screenshots
 
-\[docs/grafana-dashboard.png]
+[docs/grafana-dashboard.png]
 
-\[docs/redpanda-clinical-events-raw.png]
+[docs/redpanda-clinical-events-raw.png]
 
-\[docs/redpanda-clinical-events-dlq.png]
+[docs/redpanda-clinical-events-dlq.png]
 
 
 
