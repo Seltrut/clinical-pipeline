@@ -165,8 +165,8 @@ docker run --rm -i --add-host=host.docker.internal:host-gateway grafana/k6 run -
 
 ### Screenshots
 
-![docs/grafana-dashboard.png]
+<img width="2189" height="1170" alt="grafana-dashboard" src="https://github.com/user-attachments/assets/def070ec-a4e7-4af4-9258-944db775e417" />
 
-![docs/redpanda-clinical-events-raw.png]
+<img width="1428" height="911" alt="redpanda-clinical-events-raw" src="https://github.com/user-attachments/assets/403ef025-f759-4607-975c-6e2d3253abe5" />
 
-![docs/redpanda-clinical-events-dlq.png]
+<img width="1423" height="926" alt="redpanda-clinical-events-dlq" src="https://github.com/user-attachments/assets/7456ecb5-b8c9-42f6-9aa7-204177ebd8de" />
