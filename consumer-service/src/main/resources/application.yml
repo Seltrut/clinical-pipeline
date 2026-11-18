@@ -34,10 +34,10 @@ spring:
   jpa:
     hibernate:
       ddl-auto: update
-    show-sql: true
+    show-sql: false
     properties:
       hibernate:
-        format_sql: true
+                  format_sql: true
 
   # Redis Configuration
   data:
@@ -50,3 +50,12 @@ app:
     topics:
       clinical-events: clinical.events.raw
       clinical-dlq: clinical.events.dlq
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  metrics:
+    tags:
+      application: ${spring.application.name}

@@ -6,6 +6,9 @@ import com.clinical.consumerservice.model.ClinicalObservationEntity;
 import com.clinical.consumerservice.repository.ClinicalObservationRepository;
 import com.clinical.consumerservice.validation.ClinicalDataValidator;
 
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -17,15 +20,46 @@ import java.time.Instant;
 
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class ClinicalEventConsumer {
 
     private final ClinicalObservationRepository repository;
     private final StringRedisTemplate redisTemplate;
     private final ClinicalDataValidator validator;
 
+    private final Counter persistedCounter;
+    private final Counter duplicateCounter;
+    private final Counter validationFailureCounter;
+    private final Timer processingTimer;
+
     private static final String IDEMPOTENCY_PREFIX = "processed_event:";
     private static final Duration TTL = Duration.ofHours(24);
+
+    public ClinicalEventConsumer(
+            ClinicalObservationRepository repository,
+            StringRedisTemplate redisTemplate,
+            ClinicalDataValidator validator,
+            MeterRegistry meterRegistry) {
+        this.repository = repository;
+        this.redisTemplate = redisTemplate;
+        this.validator = validator;
+
+        this.persistedCounter = Counter.builder("clinical.events.persisted.total")
+            .description("Total number of valid clinical observations saved to PostgreSQL")
+            .register(meterRegistry);
+
+        this.duplicateCounter = Counter.builder("clinical.events.duplicates.total")
+            .description("Total number of duplicate clinical events intercepted by Redis")
+            .register(meterRegistry);
+
+        this.validationFailureCounter = Counter.builder("clinical.events.invalid.total")
+            .description("Total number of clinical events rejected due to out-of-bounds values")
+            .register(meterRegistry);
+
+        this.processingTimer = Timer.builder("clinical.events.processing.duration")
+            .description("End-to-end consumer processing time per event")
+            .publishPercentileHistogram()
+            .register(meterRegistry);
+    }
 
     /*
         * Kafka listener for clinical observation events.
@@ -34,32 +68,40 @@ public class ClinicalEventConsumer {
     */
     @KafkaListener(topics = "${app.kafka.topics.clinical-events}", groupId = "${spring.kafka.consumer.group-id}")
     public void processClinicalEvent(ClinicalObservationEvent event) {
-        log.info("Recieved event {} for patient {}", event.eventId(), event.patientId());
-        validator.validate(event);
+        processingTimer.record(() -> {
+            log.info("Recieved event {} for patient {}", event.eventId(), event.patientId());
 
-        String redisKey = IDEMPOTENCY_PREFIX + event.eventId();
+            try {
+                validator.validate(event);
+            } catch(InvalidClinicalDataException e) {
+                validationFailureCounter.increment();
+                throw e; // Rethrow to let the error handler manage it (e.g., send to DLQ)
+            }
 
-        // Atomic check-and-set in Redis (SETNX with 24-hour expiration)
-        Boolean isNewEvent = redisTemplate.opsForValue().setIfAbsent(redisKey, "PROCESSED", TTL);
+            String redisKey = IDEMPOTENCY_PREFIX + event.eventId();
+            Boolean isNewEvent = redisTemplate.opsForValue().setIfAbsent(redisKey, "PROCESSED", TTL);
 
-        if (Boolean.FALSE.equals(isNewEvent)) {
-            log.warn("Duplicate event detected: {}. Skipping database write.", event.eventId());
-            return;
-        }
+            if (Boolean.FALSE.equals(isNewEvent)) {
+                log.warn("Duplicate event detected: {}. Skipping database write.", event.eventId());
+                duplicateCounter.increment();
+                return;
+            }
 
-        // Persist to PostgreSQL
-        ClinicalObservationEntity entity = ClinicalObservationEntity.builder()
-            .eventId(event.eventId())
-            .patientId(event.patientId())
-            .code(event.code())
-            .display(event.display())
-            .value(event.value())
-            .unit(event.unit())
-            .effectiveTime(event.effectiveTime())
-            .processedAt(Instant.now())
-            .build();
+            // Persist to PostgreSQL
+            ClinicalObservationEntity entity = ClinicalObservationEntity.builder()
+                .eventId(event.eventId())
+                .patientId(event.patientId())
+                .code(event.code())
+                .display(event.display())
+                .value(event.value())
+                .unit(event.unit())
+                .effectiveTime(event.effectiveTime())
+                .processedAt(Instant.now())
+                .build();
 
-        repository.save(entity);
-        log.info("Successfully persisted event {} for patient {}", event.eventId(), event.patientId());
+            repository.save(entity);
+            persistedCounter.increment();
+            log.info("Successfully persisted event {} for patient {}", event.eventId(), event.patientId());
+        });
     }
 }
